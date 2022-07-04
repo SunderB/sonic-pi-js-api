@@ -1,0 +1,29 @@
+{
+  "name": "sonic-pi-js-api",
+  "version": "0.0.1",
+  "description": "A JavaScript API to initiate and interface with the Sonic Pi server",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "jsdoc": "npm exec -- jsdoc lib/ -r -R README.md -c jsdoc.conf.json -d docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SunderB/sonic-pi-js-api.git"
+  },
+  "keywords": [
+    "sonic-pi"
+  ],
+  "author": "SunderB",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/SunderB/sonic-pi-js-api/issues"
+  },
+  "homepage": "https://github.com/SunderB/sonic-pi-js-api#readme",
+  "dependencies": {
+    "jsdoc": "^3.6.10",
+    "event-kit": "^2.5",
+    "net": "^1.0.2",
+    "node-osc": "^1.2.0"
+  }
+}
