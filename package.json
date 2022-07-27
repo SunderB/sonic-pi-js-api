@@ -2,7 +2,7 @@
   "name": "sonic-pi-js-api",
   "version": "0.0.1",
   "description": "A JavaScript API to initiate and interface with the Sonic Pi server",
-  "main": "index.js",
+  "main": "lib/sonic-pi-api.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "jsdoc": "npm exec -- jsdoc lib/ -r -R README.md -c jsdoc.conf.json -d docs"
