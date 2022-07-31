@@ -28,15 +28,15 @@
         <article>
             <pre class="prettyprint source linenums"><code>'use babel';
 
-const os               = require('os');
-const process          = require('process');
-const fs               = require('fs');
-const path             = require('path');
-const osc              = require('node-osc');
+const os                  = require('os');
+const process             = require('process');
+const fs                  = require('fs');
+const path                = require('path');
+const osc                 = require('node-osc');
 
-const SonicPiOSCServer = require('../osc/osc-server');
-const proc_utils       = require('../utils/proc_utils.js');
-// const logger        = require('../utils/logger.js');
+const {SonicPiOSCServer}  = require('./osc/osc-server');
+const proc_utils          = require('./utils/proc_utils.js');
+// const logger           = require('./utils/logger.js');
 
 
 function sleep(ms) {
@@ -113,6 +113,25 @@ class SonicPiAPI {
     this.m_token = null;
     this.osc_server = null;
     this.osc_client = null;
+
+    /**
+    * User settings
+    * @member {Object}
+    * @property {boolean} log_synths                - Default: true
+    * @property {boolean} log_cues                  - Default: true
+    * @property {boolean} enable_external_synths    - Default: false
+    * @property {boolean} enforce_timing_guarantees - Default: false
+    * @property {boolean} check_args                - Default: false
+    * @property {number}  default_midi_channel      - Note that any number less than 0 corresponds to all channels. Must be an integer. Default: -1
+    */
+    this.settings = {
+      log_synths: true,
+      log_cues: true,
+      enable_external_synths: false,
+      enforce_timing_guarantees: false,
+      check_args: false,
+      default_midi_channel: -1
+    }
   }
 
   /**
@@ -128,71 +147,71 @@ class SonicPiAPI {
    */
   shutdown() {
     // Ask the server to exit
-    if (!this.m_bootDaemonProcess)
-    {
-      console.log("Server process is not running.");
+    if (!this.m_bootDaemonProcess) {
+      console.log("Server daemon process is not running.");
     } else {
-      // Ask the server to exit
-      // This happens really fast, and the process is typically gone before we get to the sleep below.
-      this.osc_client.send('/exit', this.m_token);
-
-      // Reproc is having a hard time figuring out that the process has gone because
-      // the ruby server is holding onto a socket and not cleaning it up.
-      // We use a quick platform-independent check for exit instead, and just give it a second
-      // for that check to succeed before doing reproc's wait/terminate/kill process which
-      // will inevitably succeed too; just with a longer delay.
-      // We should fix the ruby layer and remove these extra checks
-      sleep(1000);
-
-      // Quick check for it if it now gone
-      if (this.m_bootDaemonProcess)
-      {
-        const _this = this;
-        // OK, wait to stop it, terminate it, then till it.
-        setTimeout(() => {
-          _this.m_bootDaemonProcess.kill("SIGSTOP");
-        }, 1000);
-        setTimeout(() => {
-          _this.m_bootDaemonProcess.kill("SIGTERM");
-        }, 2000);
-        setTimeout(() => {
-          _this.m_bootDaemonProcess.kill("SIGKILL");
-        }, 3000);
+      // Stop the osc server and clients
+      if (this.osc_server) {
+        delete this.osc_server;
+      }
+      if (this.osc_client) {
+        delete this.osc_client;
       }
 
-      console.log("Server process gone");
-    }
+      // Stop the daemon keep alive thread
+      if (this.daemon_keep_alive) {
+        clearInterval(this.daemon_keep_alive);
+      }
 
-    // Stop the osc server and clients
-    if (this.osc_server) {
-      delete this.osc_server;
-    }
-    if (this.osc_client) {
-      delete this.osc_client;
-    }
-    if (this.daemon_keep_alive) {
-      clearInterval(this.daemon_keep_alive);
-    }
-    if (this.daemon_osc_client) {
-      delete this.daemon_osc_client;
-    }
+      // Tell the server to shutdown
+      this.daemon_osc_client.send("/daemon/exit", this.m_token)
+      if (this.daemon_osc_client) {
+        delete this.daemon_osc_client;
+      }
 
-    this.running = false;
+      // Make sure the daemon has exited after 10 seconds
+      const _this = this;
+
+      setTimeout(() => {
+        if (_this.m_bootDaemonProcess) {
+          console.log("Daemon still running. Sending SIGSTOP to daemon...")
+          _this.m_bootDaemonProcess.kill("SIGSTOP");
+        }
+      }, 10000);
+      setTimeout(() => {
+        if (_this.m_bootDaemonProcess) {
+          console.log("Daemon still running. Sending SIGTERM to daemon...")
+          _this.m_bootDaemonProcess.kill("SIGTERM");
+        }
+      }, 11000);
+      setTimeout(() => {
+        if (_this.m_bootDaemonProcess) {
+          console.log("Daemon still running. Sending SIGKILL to daemon...")
+          _this.m_bootDaemonProcess.kill("SIGKILL");
+        }
+      }, 12000);
+
+      this.m_bootDaemonProcess.on('exit', (code) => {
+        console.log(`Daemon exited with code ${code}`);
+        console.log("Shutdown process complete");
+        _this.running = false;
+      });
+    }
   }
 
   /**
    * Set the main volume
-   * @param {number} vol - A number from 0 to 100 indicating the volume
+   * @param {number} vol - A number from 0 to 200 indicating the volume percentage
    * @param {number} [silent=0]
-   * @throws {RangeError} Argument vol must be between 0 and 100 inclusive.
+   * @throws {RangeError} Argument vol must be between 0 and 200 inclusive.
    */
   set_volume(vol, silent=0) {
-    if (vol &lt; 0 || vol > 100) {
-        throw RangeError("Volume outside of valid range - `vol` must be between 0 and 100 inclusive");
+    if (vol &lt; 0 || vol > 200) {
+        throw RangeError("Volume outside of valid range - `vol` must be between 0 and 200 inclusive");
     }
 
-    console.log(`[GUI] - Changing volume to ${vol}%`);
-    v = (vol / 100) * 2.0;
+    console.log(`[SonicPiAPI] - Changing volume to ${vol}%`);
+    v = (vol / 100);
     this.osc_client.send('/mixer-amp', this.m_token, v, silent);
   }
 
@@ -277,11 +296,45 @@ class SonicPiAPI {
   }
 
   /**
+  * Apply user settings to the code
+  * @private
+  * @param {string} code - Code to process
+  * @returns {string} - Processed code
+  */
+  preprocess_code(code) {
+    var user_settings = "";
+    if (!this.settings.log_synths) {
+      user_settings += "use_debug false #__nosave__ set by user preferences.\n";
+    }
+    if (!this.settings.log_cues) {
+      user_settings += "use_cue_logging false #__nosave__ set by user preferences.\n";
+    }
+    if (this.settings.check_args) {
+      user_settings += "use_arg_checks true #__nosave__ set by user preferences.\n";
+    }
+    if (this.settings.enable_external_synths) {
+      user_settings += "use_external_synths true #__nosave__ set by user preferences.\n";
+    }
+    if (this.settings.enforce_timing_guarantees) {
+      user_settings += "use_timing_guarantees true #__nosave__ set by user preferences.\n";
+    }
+
+    midi_channel = this.settings.default_midi_channel;
+    if (midi_channel &lt;= 0) {
+      midi_channel = "*";
+    }
+    user_settings += `use_midi_defaults channel: "${midi_channel}" #__nosave__ set by user preferences.\n`;
+
+    return user_settings + code;
+  }
+
+  /**
    * Run code
    * @param {string} code - The code to run
    */
   run_code(code) {
-    this.osc_client.send('/run-code', this.m_token, code);
+    processed_code = this.preprocess_code(code);
+    this.osc_client.send('/run-code', this.m_token, processed_code);
   }
 
   /**
@@ -302,7 +355,8 @@ class SonicPiAPI {
    * @param {string} code - The code to save and run
    */
   save_and_run_buffer(buffer, code) {
-    this.osc_client.send("/save-and-run-buffer", this.m_token, buffer, code, buffer);
+    processed_code = this.preprocess_code(code);
+    this.osc_client.send("/save-and-run-buffer", this.m_token, buffer, processed_code, buffer);
   }
 
   /**
@@ -442,7 +496,7 @@ class SonicPiAPI {
 }
 
 module.exports = {
-    SonicPiAPI
+  SonicPiAPI
 };
 </code></pre>
         </article>
@@ -454,13 +508,13 @@ module.exports = {
 </div>
 
 <nav>
-    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="SonicPiAPI.html">SonicPiAPI</a></li></ul><h3>Events</h3><ul><li><a href="SonicPiOSCServer.html#event:error">error</a></li><li><a href="SonicPiOSCServer.html#event:log">log</a></li></ul>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="SonicPiAPI.html">SonicPiAPI</a></li><li><a href="SonicPiOSCServer.html">SonicPiOSCServer</a></li></ul><h3>Events</h3><ul><li><a href="SonicPiOSCServer.html#event:ack">ack</a></li><li><a href="SonicPiOSCServer.html#event:error">error</a></li><li><a href="SonicPiOSCServer.html#event:exited">exited</a></li><li><a href="SonicPiOSCServer.html#event:log">log</a></li></ul>
 </nav>
 
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.10</a> on Tue Jul 26 2022 13:41:40 GMT+0100 (British Summer Time)
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.10</a> on Sun Jul 31 2022 15:41:18 GMT+0100 (British Summer Time)
 </footer>
 
 <script> prettyPrint(); </script>
