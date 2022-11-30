@@ -1,27 +1,39 @@
 # sonic-pi-js-api
-An experimental JavaScript API to interact with the Sonic Pi server.
+An experimental JavaScript API to start and interact with the Sonic Pi server. Compatible with Sonic Pi v4.x.
 
-## Features
-Booting:
-* [x] Boot and initialise the server
-* [x] Shutdown the server
+![npm (scoped)](https://img.shields.io/npm/v/@sunderb/sonic-pi-js-api)
 
-Basic commands:
-* [x] Run code
-* [x] Stop all jobs
 
-Buffers/workspaces:
-* [ ] Load workspaces - partially implemented
-* [x] Save and play buffer
-* [x] Save workspaces
-* [x] Buffer new line and indent
+## 📖 Documentation
+Documentation is available online at https://sunderb.me/sonic-pi-js-api/latest/
 
-Options:
-* [x] Main volume
-* [ ] Safe mode
-* [x] External synths
-* [ ] MIDI - partial
-* [ ] Link
+
+## ✨ Features
+| Feature | Implemented? |
+| --- | --- |
+| **Booting** | |
+| Boot and initialise the server    | ✅ Yes | 
+| Shutdown the server               | ✅ Yes | 
+| **Basic commands** |  |
+| Run code                          | ✅ Yes | 
+| Stop all jobs                     | ✅ Yes |
+| **Buffers/workspaces** | | 
+| Load workspaces                   | 🚧 Partial |
+| Save workspaces                   | ✅ Yes (untested) | 
+| Save and play buffer              | ✅ Yes (untested) | 
+| Buffer new line and indent        | ✅ Yes (untested) |
+| **Recordings** | |
+| Start recording                   | ❌ No |
+| Stop recording                    | ❌ No |
+| **Logging** | |
+| Handle and emit log messages      | ✅ Yes | 
+| Handle and emit errors            | 🚧 Partial |
+| **Options & IO** | |
+| Main volume                       | ✅ Yes |
+| Safe mode                         | ❌ No |
+| External synths                   | ✅ Yes |
+| MIDI options                      | 🚧 Partial |
+| Link                              | ❌ No |
 
 ## Attributions
 * Heavily based on on the [official C++ Sonic Pi API](https://github.com/sonic-pi-net/sonic-pi/tree/dev/app/api) (although not a fully exact copy)

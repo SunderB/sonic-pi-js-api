@@ -1,6 +1,6 @@
 {
   "name": "@sunderb/sonic-pi-js-api",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A JavaScript API to initiate and interface with the Sonic Pi server",
   "main": "lib/sonic-pi-api.js",
   "scripts": {
