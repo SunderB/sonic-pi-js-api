@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: osc/osc-server.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: osc/osc-server.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>const osc = require('node-osc');
+const { EventEmitter } = require('events');
+
+/**
+ * A class used to receive messages from the Sonic Pi server.
+ */
+class SonicPiOSCServer {
+
+  /**
+   * Creates an instance of the `SonicPiOSCServer` Class
+   * @constructor
+   * @classdesc A class used to receive and acknowledge messages from the Sonic Pi server.
+   * @param {string} ip - the IP address of this OSC server
+   * @param {number} port - the port to listen on
+   * @param {string} spider_ip - the IP address of the Sonic Pi server
+   * @param {number} spider_port - the port to send acknowledgements to
+   *
+   */
+  constructor(ip, port, spider_ip, spider_port) {
+    let _this = this;
+
+    this.m_port = port;
+    this.m_ip = ip;
+    this.emitter = new EventEmitter();
+    this.osc_client = new osc.Client(spider_ip, spider_port);
+
+    this.osc_server = new osc.Server(port, ip, () => {
+      console.log(`OSC server is listening on ${ip}:${port}`);
+    });
+
+    this.osc_server.on('message', function (msg) {
+      switch (msg[0]) {
+        /**
+         * Logging
+         *
+         * @event SonicPiOSCServer#log
+         * @type {object}
+         * @property {string} type - `info`, `error` or `multi_message`
+         * @property {object[]} message_info - Varies depending on the type
+         */
+        case "/log/info":
+          _this.emitter.emit('log', {
+            type: "info",
+            message_info: msg.slice(1)
+          });
+          break;
+        case "/log/error":
+          _this.emitter.emit('log', {
+            type: "error",
+            message_info: msg.slice(1)
+          });
+          break;
+        case "/log/multi_message":
+          _this.emitter.emit('log', {
+            type: "multi_message",
+            message_info: msg.slice(1)
+          });
+          break;
+
+        // Boot errors
+        case "/exited-with-boot-error":
+          var info = {
+            message: msg[1]
+          };
+          _this.emitter.emit("boot_error", info);
+          break;
+
+
+        /**
+         * Runtime/syntax errors
+         *
+         * @event SonicPiOSCServer#error
+         * @type {object}
+         * @property {string} type - Either `runtime_error` or `syntax_error`
+         * @property {number} job_id
+         * @property {string} message
+         * @property {number} line_number
+         * @property {string} line_number_string - Syntax errors only
+         * @property {string} line_string - Syntax errors only
+         * @property {string} backtrace - Runtime errors only
+         */
+        case "/error":
+          var error_info = {
+            type: "runtime_error",
+            job_id: parseInt(msg[1]),
+            message: msg[2],
+            backtrace: msg[3],
+            line_number: parseInt(msg[4])
+          }
+          _this.emitter.emit("error", error_info);
+          break;
+        case "/syntax_error":
+          var error_info = {
+            type: "syntax_error",
+            job_id: parseInt(msg[1]),
+            message: msg[2],
+            line_string: msg[3],
+            line_number: parseInt(msg[4]),
+            line_number_string: msg[5]
+          }
+          _this.emitter.emit("error", error_info);
+          break;
+
+        /**
+         * Emitted when the Sonic Pi server exits.
+         *
+         * @event SonicPiOSCServer#exited
+         */
+        case "/exited":
+          _this.emitter.emit('exited');
+
+        /**
+         * Emitted when the Sonic Pi server acknowledges a message.
+         *
+         * @event SonicPiOSCServer#ack
+         * @type {object}
+         * @property {object} id
+         */
+        case "/ack":
+          var info = {
+            id: msg[1]
+          }
+          _this.emitter.emit('ack', info);
+
+        default:
+
+      }
+      console.log(`Message recieved: ${msg}`);
+      _this.osc_client.send("/ack");
+    })
+  }
+
+  destructor() {
+    this.osc_server.close();
+    this.emitter.dispose();
+  }
+}
+
+module.exports = {
+  SonicPiOSCServer
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="SonicPiAPI.html">SonicPiAPI</a></li><li><a href="SonicPiOSCServer.html">SonicPiOSCServer</a></li></ul><h3>Events</h3><ul><li><a href="SonicPiAPI.html#event:received_ports">received_ports</a></li><li><a href="SonicPiAPI.html#event:shutdown_complete">shutdown_complete</a></li><li><a href="SonicPiOSCServer.html#event:ack">ack</a></li><li><a href="SonicPiOSCServer.html#event:error">error</a></li><li><a href="SonicPiOSCServer.html#event:exited">exited</a></li><li><a href="SonicPiOSCServer.html#event:log">log</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.2</a> on Sun May 21 2023 23:59:22 GMT+0100 (British Summer Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

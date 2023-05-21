@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: sonic-pi-api.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: sonic-pi-api.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>'use babel';
+
+const os                  = require('os');
+const process             = require('process');
+const fs                  = require('fs');
+const path                = require('path');
+const { EventEmitter }    = require('events');
+const osc                 = require('node-osc');
+
+const {SonicPiOSCServer}  = require('./osc/osc-server');
+const proc_utils          = require('./utils/proc_utils.js');
+// const logger           = require('./utils/logger.js');
+
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * A class used to initiate, interface with, and shutdown the Sonic Pi server.
+ */
+class SonicPiAPI {
+  /**
+   * @constant
+   * @private
+   */
+  string_number_name = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten"
+  ]
+
+  /**
+   * @typedef {Object} Result
+   * @memberof SonicPiAPI
+   * @property {boolean} success - Whether the operation was successful
+   * @property {string} error_message - An error message if something went wrong - only present if `success` is false
+   */
+
+   /**
+    * @typedef {Object} BootDaemonOutput
+    * @memberof SonicPiAPI
+    * @private
+    * @property {number} token - null if failed to get output
+    * @property {Object[]} ports - null if failed to get output
+    * @property {number} ports.daemon
+    * @property {number} ports.gui_listen_to_spider
+    * @property {number} ports.gui_send_to_spider
+    * @property {number} ports.scsynth
+    * @property {number} ports.tau_osc_cues
+    * @property {number} ports.tau
+    * @property {number} ports.phx_http
+    */
+
+  /**
+   * Creates an instance of the `SonicPiAPI` Class
+   * @constructor
+   * @classdesc A class used to initiate, interface with, and shutdown the Sonic Pi server.
+   */
+  constructor() {
+    this.running = false;
+    this.use_udp = false;
+    this.m_paths =  {
+      RootPath: "", // Sonic Pi Application root
+      RubyPath: "", // Path to ruby executable
+      BootDaemonPath: "", // Path to the ruby server script
+
+      SamplePath: "", // Path to the samples folder
+      UserPath: "",
+      ServerErrorLogPath: "",
+      ServerOutputLogPath: "",
+      ProcessLogPath: "",
+      SCSynthLogPath: "",
+      GUILogPath: ""
+    }
+    this.m_ports = {}
+    this.m_guid = "";
+    this.m_token = null;
+    this.m_homeDirWriteable = false;
+    this.osc_server = null;
+    this.osc_client = null;
+    this.status_emitter = new EventEmitter();
+
+    /**
+    * User settings
+    * @member {Object}
+    * @property {boolean} log_synths                - Default: true
+    * @property {boolean} log_cues                  - Default: true
+    * @property {boolean} enable_external_synths    - Default: false
+    * @property {boolean} enforce_timing_guarantees - Default: false
+    * @property {boolean} check_args                - Default: false
+    * @property {number}  default_midi_channel      - Note that any number less than 0 corresponds to all channels. Must be an integer. Default: -1
+    */
+    this.settings = {
+      log_synths: true,
+      log_cues: true,
+      enable_external_synths: false,
+      enforce_timing_guarantees: false,
+      check_args: false,
+      default_midi_channel: -1
+    }
+  }
+
+  /**
+   * Destructor for the Sonic Pi API Class
+   * @private
+   */
+  destructor() {
+    this.shutdown();
+  }
+
+  /**
+   * Shuts down the Sonic Pi server
+   */
+  shutdown() {
+    // Ask the server to exit
+    if (!this.m_bootDaemonProcess) {
+      console.log("Server daemon process is not running.");
+    } else {
+      // Stop the osc server and clients
+      if (this.osc_server) {
+        delete this.osc_server;
+      }
+      if (this.osc_client) {
+        delete this.osc_client;
+      }
+
+      // Stop the daemon keep alive thread
+      if (this.daemon_keep_alive) {
+        clearInterval(this.daemon_keep_alive);
+      }
+
+      // Tell the server to shutdown
+      this.daemon_osc_client.send("/daemon/exit", this.m_token)
+      if (this.daemon_osc_client) {
+        delete this.daemon_osc_client;
+      }
+
+      // Make sure the daemon has exited after 10 seconds
+      const _this = this;
+
+      setTimeout(() => {
+        if (_this.m_bootDaemonProcess) {
+          console.log("Daemon still running. Sending SIGSTOP to daemon...")
+          _this.m_bootDaemonProcess.kill("SIGSTOP");
+        }
+      }, 10000);
+      setTimeout(() => {
+        if (_this.m_bootDaemonProcess) {
+          console.log("Daemon still running. Sending SIGTERM to daemon...")
+          _this.m_bootDaemonProcess.kill("SIGTERM");
+        }
+      }, 11000);
+      setTimeout(() => {
+        if (_this.m_bootDaemonProcess) {
+          console.log("Daemon still running. Sending SIGKILL to daemon...")
+          _this.m_bootDaemonProcess.kill("SIGKILL");
+        }
+      }, 12000);
+
+      this.m_bootDaemonProcess.on('exit', (code, signal) => {
+        console.log(`Daemon exited with code ${code} and signal ${signal}`);
+        console.log("Shutdown process complete");
+        /**
+         * Emitted when the shutdown process is complete (i.e. when the boot daemon has exited)
+         *
+         * @event SonicPiAPI#shutdown_complete
+         */
+        _this.status_emitter.emit("shutdown_complete");
+        _this.m_bootDaemonProcess = null;
+        _this.running = false;
+      });
+    }
+  }
+
+  /**
+   * Set the main volume
+   * @param {number} vol - A number from 0 to 200 indicating the volume percentage
+   * @param {number} [silent=0]
+   * @throws {RangeError} Argument vol must be between 0 and 200 inclusive.
+   */
+  set_volume(vol, silent=0) {
+    if (vol &lt; 0 || vol > 200) {
+        throw RangeError("Volume outside of valid range - `vol` must be between 0 and 200 inclusive");
+    }
+
+    console.log(`[SonicPiAPI] - Changing volume to ${vol}%`);
+    var v = (vol / 100);
+    this.osc_client.send('/mixer-amp', this.m_token, v, silent);
+  }
+
+  /**
+   * Handle and log a startup error
+   * @param {string} message - Error message
+   * @private
+   */
+  startup_error(message) {
+    var stack = new Error().stack;
+    console.error(`Failed to start Sonic Pi server: ${message}\nStack trace: ${stack}`);
+    this.shutdown();
+    return {
+      success: false,
+      error_message: message
+    };
+  }
+
+  /**
+   * Start the boot daemon
+   * @private
+   * @returns {Promise&lt;BootDaemonOutput>}
+   */
+  start_boot_daemon() {
+    console.log("Launching Sonic Pi Boot Daemon:");
+    const _this = this;
+
+    var cmd = this.m_paths.RubyPath;
+    var args = [];
+
+    args.push(this.m_paths.BootDaemonPath);
+
+    console.log("Args: " + args.join(", "));
+
+    this.m_bootDaemonProcess = proc_utils.start_process(cmd, args);
+    if (!this.m_bootDaemonProcess) {
+      atom.notifications.addError("The Boot Daemon could not be started!");
+      console.error("Failed to start Boot Daemon!");
+      return false;
+    }
+
+    console.log("Attempting to read Boot Daemon output");
+    return new Promise((resolve, reject) => {
+      _this.m_bootDaemonProcess.stdout.once('data', (data) => {
+        console.log(`Received chunk ${data}`);
+
+        var list = data.toString().split(" ");
+
+        var token = list.pop();
+        var ports = list;
+
+        // Redirect stdout and stderr
+        var out_pipe = fs.createWriteStream(this.m_paths.DaemonLogPath);
+        _this.m_bootDaemonProcess.stdout.pipe(out_pipe);
+        _this.m_bootDaemonProcess.stderr.pipe(out_pipe);
+        console.log(`Token: ${token}`)
+        console.log(`Ports: ${ports}`)
+        if (ports.length == 7) {
+          resolve({
+            token: parseInt(token),
+            ports: {
+              daemon:               parseInt(ports[0]),
+              gui_listen_to_spider: parseInt(ports[1]),
+              gui_send_to_spider:   parseInt(ports[2]),
+              scsynth:              parseInt(ports[3]),
+              tau_osc_cues:         parseInt(ports[4]),
+              tau:                  parseInt(ports[5]),
+              phx_http:             parseInt(ports[6])
+            }
+          });
+        } else {
+          resolve({
+            token: null,
+            ports: null
+          });
+        }
+      });
+      _this.m_bootDaemonProcess.once('error', (err) => {
+        reject(err);
+      });
+    });
+  }
+
+  /**
+  * Apply user settings to the code
+  * @private
+  * @param {string} code - Code to process
+  * @returns {string} - Processed code
+  */
+  preprocess_code(code) {
+    var user_settings = "";
+    if (!this.settings.log_synths) {
+      user_settings += "use_debug false #__nosave__ set by user preferences.\n";
+    }
+    if (!this.settings.log_cues) {
+      user_settings += "use_cue_logging false #__nosave__ set by user preferences.\n";
+    }
+    if (this.settings.check_args) {
+      user_settings += "use_arg_checks true #__nosave__ set by user preferences.\n";
+    }
+    if (this.settings.enable_external_synths) {
+      user_settings += "use_external_synths true #__nosave__ set by user preferences.\n";
+    }
+    if (this.settings.enforce_timing_guarantees) {
+      user_settings += "use_timing_guarantees true #__nosave__ set by user preferences.\n";
+    }
+
+    var midi_channel = this.settings.default_midi_channel;
+    if (midi_channel &lt;= 0) {
+      midi_channel = "*";
+    }
+    user_settings += `use_midi_defaults channel: "${midi_channel}" #__nosave__ set by user preferences.\n`;
+
+    return user_settings + code;
+  }
+
+  /**
+   * Run code
+   * @param {string} code - The code to run
+   */
+  run_code(code) {
+    var processed_code = this.preprocess_code(code);
+    this.osc_client.send('/run-code', this.m_token, processed_code);
+  }
+
+  /**
+   * Buffer new line and indent
+   * @param {number} point_line
+   * @param {number} point_index
+   * @param {number} first_line
+   * @param {string} code
+   * @param {string} file_name
+   */
+  buffer_new_line_and_indent(point_line, point_index, first_line, code, file_name) {
+    this.osc_client.send('/buffer-newline-and-indent', this.m_token, file_name, code, point_line, point_index, first_line);
+  }
+
+  /**
+   * Save and run buffer
+   * @param {string} buffer - Buffer identifier
+   * @param {string} code - The code to save and run
+   */
+  save_and_run_buffer(buffer, code) {
+    var processed_code = this.preprocess_code(code);
+    this.osc_client.send("/save-and-run-buffer", this.m_token, buffer, processed_code, buffer);
+  }
+
+  /**
+   * Load workspaces
+  */
+  load_workspaces() {
+    for (var i = 0; i &lt; this.max_workspaces; i++) {
+      this.osc_client.send("/load-buffer", this.m_token, `workspace_${string_number_name(i)}`);
+    }
+  }
+
+  /**
+   * Save workspaces
+   * @param {Object[]} workspaces
+   * @param {string} workspaces.n - The code to save in workspace `n`, where `n` is an integer in the range: 0 ≤ n &lt; `max_workspaces`
+   */
+  save_workspaces(workspaces) {
+    for (var i = 0; i &lt; this.max_workspaces; i++) {
+      if (i in workspaces) {
+        this.osc_client.send("/save-buffer", this.m_token, `workspace_${string_number_name(i)}`, workspaces[i]);
+      }
+    }
+  }
+
+  /**
+   * Stop all jobs
+   */
+  stop_all_jobs() {
+    this.osc_client.send('/stop-all-jobs', this.m_token);
+  }
+
+  /**
+   * Initialise the Sonic Pi server
+   * @param {string} root - Root path of Sonic Pi
+   * @async
+   * @returns {Result} The result of the initialisation process
+   */
+  async init(root) {
+    if (this.running) {
+      return this.startup_error("Sonic Pi server is already running");
+    }
+
+    if (!fs.existsSync(path.normalize(root))) {
+      return this.startup_error(`Could not find root path: ${root}`);
+    }
+    this.m_paths.RootPath = path.normalize(root);
+
+    // Find ruby path
+    if (process.platform == "win32") {
+      this.m_paths.RubyPath = path.join(this.m_paths.RootPath, "app/server/native/ruby/bin/ruby.exe");
+    } else {
+      this.m_paths.RubyPath = path.join(this.m_paths.RootPath, "app/server/native/ruby/bin/ruby");
+    }
+
+    if (!fs.existsSync(this.m_paths.RubyPath)) {
+      this.m_paths.RubyPath = "ruby";
+    }
+
+    // Check script paths
+    this.m_paths.BootDaemonPath = path.join(this.m_paths.RootPath, "app/server/ruby/bin/daemon.rb");
+    if (!fs.existsSync(this.m_paths.BootDaemonPath)) {
+      return this.startup_error(`Could not find boot daemon script path: ${this.m_paths.BootDaemonPath}`);
+    }
+
+    // Samples
+    this.m_paths.SamplePath = path.join(this.m_paths.RootPath, "etc/samples");
+
+    // Sonic Pi home directory
+    this.m_paths.UserPath = path.join(os.homedir(), ".sonic-pi");
+    var logPath = path.join(this.m_paths.UserPath, "log");
+
+    // Make the log folder and check we can write to it.
+    // This is ~/.sonic-pi/log
+    this.m_homeDirWriteable = true;
+    try {
+      if (!fs.existsSync(logPath)) {
+        fs.mkdirSync(logPath);
+        fs.writeFileSync(path.join(logPath, ".writeTest"), "test");
+        fs.unlinkSync(path.join(logPath, ".writeTest"));
+      }
+    } catch (err) {
+      console.error(`Home directory not writable: ${err}`);
+      this.m_homeDirWriteable = false;
+    }
+
+    // Our log paths
+    this.m_paths.DaemonLogPath       = path.join(logPath, "daemon.log");
+    this.m_paths.ServerErrorLogPath  = path.join(logPath, "server-errors.log");
+    this.m_paths.ServerOutputLogPath = path.join(logPath, "server-output.log");
+    this.m_paths.ProcessLogPath      = path.join(logPath, "processes.log");
+    this.m_paths.SCSynthLogPath      = path.join(logPath, "scsynth.log");
+    this.m_paths.GUILogPath          = path.join(logPath, "gui.log");
+
+    // // Setup redirection of log from this app to our log file
+    // // stdout into ~/.sonic-pi/log/gui.log
+    // if (m_homeDirWriteable &amp;&amp; (m_logOption == LogOption::File))
+    // {
+    //     m_coutbuf = std::cout.rdbuf();
+    //     m_stdlog.open(m_paths.GUILogPath.string().c_str());
+    //     std::cout.rdbuf(m_stdlog.rdbuf());
+    // }
+
+    console.log("Welcome to Sonic Pi");
+    console.log("===================");
+
+    var result = await this.start_boot_daemon();
+
+    if (!result) {
+      return this.startup_error("Failed to start boot baemon")
+    }
+
+    this.m_token = result.token;
+    this.m_ports = result.ports;
+
+    console.log(`Token: ${this.m_token}`)
+    console.log(`Ports: ${this.m_ports}`)
+
+    /**
+     * Emits the ports used for communicating with different parts of the server
+     *
+     * @event SonicPiAPI#received_ports
+     * @type {object}
+     * @property {number} daemon                - Port for sending commands to boot daemon
+     * @property {number} gui_listen_to_spider  - Port for Spider (Ruby Server) to GUI communications
+     * @property {number} gui_send_to_spider    - Port for GUI to Spider communications
+     * @property {number} scsynth               - Port for sending commands to scsynth
+     * @property {number} tau_osc_cues          - Port for receiving OSC cues
+     * @property {number} tau                   - Port for sending messages to Tau (Elixir Server)
+     * @property {number} phx_http              - Port that the Tau webpage is served on
+     */
+    this.status_emitter.emit("received_ports", this.m_ports);
+
+    if (this.m_token == null) {
+      return this.startup_error(`Unable to get client token from boot daemon`);
+    }
+
+    this.daemon_osc_client = new osc.Client("127.0.0.1", this.m_ports.daemon);
+    let _this = this;
+    this.daemon_keep_alive = setInterval(() => {
+      _this.daemon_osc_client.send("/daemon/keep-alive", _this.m_token);
+    }, 4000);
+
+    this.osc_client = new osc.Client("127.0.0.1", this.m_ports.gui_send_to_spider);
+    this.osc_server = new SonicPiOSCServer("127.0.0.1", this.m_ports.gui_listen_to_spider, "127.0.0.1", this.m_ports.gui_send_to_spider);
+
+    this.running = true;
+    console.log("Init SonicPi Succeeded...");
+    return {
+      success: true,
+    };
+
+  }
+}
+
+module.exports = {
+  SonicPiAPI
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="SonicPiAPI.html">SonicPiAPI</a></li><li><a href="SonicPiOSCServer.html">SonicPiOSCServer</a></li></ul><h3>Events</h3><ul><li><a href="SonicPiAPI.html#event:received_ports">received_ports</a></li><li><a href="SonicPiAPI.html#event:shutdown_complete">shutdown_complete</a></li><li><a href="SonicPiOSCServer.html#event:ack">ack</a></li><li><a href="SonicPiOSCServer.html#event:error">error</a></li><li><a href="SonicPiOSCServer.html#event:exited">exited</a></li><li><a href="SonicPiOSCServer.html#event:log">log</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.2</a> on Sun May 21 2023 23:59:22 GMT+0100 (British Summer Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
