@@ -24,6 +24,6 @@
     "node-osc": "^1.2.0"
   },
   "devDependencies": {
-    "jsdoc": "^3.6.10"
+    "jsdoc": "^4.0.2"
   }
 }
