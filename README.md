@@ -1,7 +1,7 @@
 # sonic-pi-js-api
 An experimental JavaScript API to start and interact with the Sonic Pi server. Compatible with Sonic Pi v4.x.
 
-![npm (scoped)](https://img.shields.io/npm/v/@sunderb/sonic-pi-js-api)
+[![npm (scoped)](https://img.shields.io/npm/v/@sunderb/sonic-pi-js-api)](https://www.npmjs.com/package/@sunderb/sonic-pi-js-api)
 
 
 ## 📖 Documentation
@@ -36,7 +36,7 @@ Documentation is available online at https://sunderb.me/sonic-pi-js-api/latest/
 | Link                              | ❌ No |
 
 ## Attributions
-* Heavily based on on the [official C++ Sonic Pi API](https://github.com/sonic-pi-net/sonic-pi/tree/dev/app/api) (although not a fully exact copy)
+* Heavily based on on the [official C++ Sonic Pi API](https://github.com/sonic-pi-net/sonic-pi/tree/dev/app/api) (although not a fully exact copy) - MIT License
 
 ### Dependencies
 * [node-osc](https://github.com/MylesBorins/node-osc) - LGPL 3.0 or later
